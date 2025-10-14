@@ -17,7 +17,7 @@ WP_AUTO_INSTALL="${WP_AUTO_INSTALL:-1}"
 
 # Admin creds for auto install
 ADMIN_PASS_FILE="/run/secrets/wp_admin_pass"
-ADMIN_USER="${WP_ADMIN_USER:-admin}"
+ADMIN_USER="${WP_ADMIN_USER:-wpadmin42}"
 ADMIN_EMAIL="${WP_ADMIN_EMAIL:-admin@example.com}"
 SITE_URL="https://${DOMAIN_NAME:-localhost}"
 
@@ -46,6 +46,9 @@ if ! php -m 2>/dev/null | grep -qi 'phar'; then
   apk add --no-cache php82-phar >/dev/null 2>&1 || true
 fi
 if ! command -v wp >/dev/null 2>&1; then
+	if ! command -v curl >/dev/null 2>&1; then
+		apk add --no-cache curl >/dev/null 2>&1 || true
+	fi
   curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
     -o /usr/local/bin/wp || true
   chmod +x /usr/local/bin/wp || true
@@ -89,6 +92,32 @@ if [ "$WP_AUTO_INSTALL" != "0" ]; then
 else
   echo "[WP] Pristine mode: skipping core install (browser wizard will ask only for admin)."
 fi
+
+# --- Create required second (non-admin) user (idempotent) ---
+SECOND_USER="${WP_SECOND_USER:-writer42}"
+SECOND_EMAIL="${WP_SECOND_EMAIL:-writer42@example.com}"
+
+# Optional: get password from secret file if provided
+SECOND_PASS=""
+if [ -n "${WP_SECOND_PASSWORD_FILE:-}" ] && [ -f "$WP_SECOND_PASSWORD_FILE" ]; then
+  SECOND_PASS="$(cat "$WP_SECOND_PASSWORD_FILE")"
+fi
+
+if wp core is-installed --allow-root --path="$WP_PATH" >/dev/null 2>&1; then
+  if ! wp user get "$SECOND_USER" --field=ID --allow-root --path="$WP_PATH" >/dev/null 2>&1; then
+    echo "[WP] Creating second WordPress user: $SECOND_USER"
+    if [ -n "$SECOND_PASS" ]; then
+      wp user create "$SECOND_USER" "$SECOND_EMAIL" --role=editor --user_pass="$SECOND_PASS" \
+        --allow-root --path="$WP_PATH" || true
+    else
+      wp user create "$SECOND_USER" "$SECOND_EMAIL" --role=editor \
+        --allow-root --path="$WP_PATH" || true
+    fi
+  else
+    echo "[WP] Second user already exists: $SECOND_USER"
+  fi
+fi
+
 
 echo "[WP] Starting php-fpm82…"
 exec php-fpm82 -F

@@ -14,13 +14,13 @@ volumes:
     driver: local
     driver_opts:
       type: none
-      device: /home/nryser/data/wordpress
+      device: /home/${Login}/data/wordpress
       o: bind
   db_data:
     driver: local
     driver_opts:
       type: none
-      device: /home/nryser/data/mariadb
+      device: /home/${Login}/data/mariadb
       o: bind
 
 secrets:
@@ -30,10 +30,13 @@ secrets:
     file: ../secrets/db_password.txt
   wp_admin_pass:
     file: ../secrets/credentials.txt
+  wp_second_pass:
+    file: ../secrets/wp_second_pass.txt
 
 services:
   # ===================== MariaDB =====================
   mariadb:
+    image : mariadb
     build: ./requirements/mariadb
     container_name: mariadb
     restart: unless-stopped
@@ -57,6 +60,7 @@ services:
 
   # ================= WordPress (php-fpm) ==============
   wordpress:
+    image: wordpress
     build:
       context: ./requirements/wordpress
     container_name: wordpress
@@ -74,11 +78,15 @@ services:
       WP_ADMIN_EMAIL: ${WP_ADMIN_EMAIL}
       WP_AUTO_INSTALL: ${WP_AUTO_INSTALL:-1}
       DOMAIN_NAME: ${DOMAIN_NAME}
+      WP_SECOND_USER: ${WP_SECOND_USER:-writer42}
+      WP_SECOND_EMAIL: ${WP_SECOND_EMAIL:-writer42@example.com}
+      WP_SECOND_PASSWORD_FILE: /run/secrets/wp_second_pass
     volumes:
       - wp_data:/var/www/wordpress
     secrets:
       - db_password
       - wp_admin_pass
+      - wp_second_pass
     healthcheck:
       # healthy only when FPM cfg parses AND index.php exists (prevents nginx 403)
       test: ["CMD-SHELL", "php-fpm82 -t >/dev/null 2>&1 || exit 1; [ -f /var/www/wordpress/index.php ]"]
@@ -89,6 +97,7 @@ services:
 
   # ====================== NGINX =======================
   nginx:
+    image: nginx
     build:
       context: ./requirements/nginx
       args:
