@@ -1,0 +1,13 @@
+# --- Secrets (NEVER commit) ---
+secrets/*
+!secrets/.gitkeep
+
+# --- Docker noise ---
+docker-compose.override.yml
+**/*.log
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
