@@ -1,5 +1,18 @@
 # ==============================
 # Inception Makefile (staged up)
+# Purpose: Orchestrate build/start/stop, resets, quick tests
+# Cheat sheet:
+# - make up         : staged bring-up (DB → WP → NGINX) with health waits
+# - make build      : build images only
+# - make down       : stop+remove containers (bind dirs kept)
+# - make re         : nuke both bind dirs, rebuild, staged up
+# - make pristine   : absolute nuke (bind dirs + named vols + images), rebuild, up
+# - make logs/ps    : follow logs / show status
+# - make sh-*       : shell into a container
+# - make wp-reset   : delete only WP bind dir, keep DB
+# - make db-reset   : delete DB bind dir (data loss), keep WP files
+# - make test       : smoke tests (TLS, routing, FPM, DB, WP)
+# - make env        : show fully-resolved compose config
 # ==============================
 SHELL := /bin/bash
 
@@ -23,6 +36,7 @@ BLU  := \033[36m
 PRP  := \033[95m
 RST  := \033[0m
 
+# Help text printed by `make` or `make help`
 define PRINT_HEADER
 	@printf "$(BOLD)Inception Makefile$(RST) – $(DIM)common tasks$(RST)\n"
 	@printf "  $(BLU)make up$(RST)               : Build (if needed), staged start (DB→WP→NGINX)\n"
@@ -50,12 +64,14 @@ help:
 	$(PRINT_HEADER)
 
 # ---------- helpers ----------
+# Normalize shell scripts (LF endings + executable bit)
 define normalize_scripts
 	@find $(PROJECT)/requirements -type f -name "*.sh" -exec sed -i 's/\r$$//' {} \;
 	@find $(PROJECT)/requirements -type f -name "*.sh" -exec chmod +x {} \;
 	@printf "✔ Scripts normalized (LF) and executable\n"
 endef
 
+# Ensure required files exist before attempting `docker compose`
 define ensure_files
 	@[ -f $(COMPOSE_FILE) ] || { printf "$(RED)✖ Missing $(COMPOSE_FILE)$(RST)\n"; exit 1; }
 	@[ -f $(ENV_FILE) ]     || { printf "$(RED)✖ Missing $(ENV_FILE)$(RST)\n"; exit 1; }
