@@ -1,57 +1,63 @@
-# ===================================================================
-# Inception — WordPress (php-fpm) + NGINX (TLS 1.2/1.3) + MariaDB
-# - 3 services only
-# - HTTPS only (443) exposed to host
-# - Data persists under /home/nryser/data/{wordpress,mariadb}
-# - Secrets mounted from ../secrets/*
-# ===================================================================
+# ==============================================================================
+# Stack: WordPress (php-fpm) + NGINX (TLS) + MariaDB
+#
+# Cheat sheet:
+# - networks.appnet            : single user-defined bridge network for all svcs
+# - volumes.wp_data/db_data    : bind-mounts to /home/${LOGIN}/data/* (persist)
+# - secrets/*                  : injected at /run/secrets/* inside services
+# - depends_on + healthcheck   : sequenced startup (DB → WP → NGINX)
+# - Only 443 exposed           : HTTPS-only from host to NGINX
+# - Subject compliance         : no hacky loops; each container runs its daemon PID 1
+# - Env substitution           : ${VAR} and ${VAR:-default} read from .env / shell
+# ==============================================================================
 
 networks:
-  appnet: {}
+  appnet: {}                              # required custom network (not host)
 
 volumes:
   wp_data:
     driver: local
     driver_opts:
       type: none
-      device: /home/${LOGIN}/data/wordpress
+      device: /home/${LOGIN}/data/wordpress  # bind host path → persistent WP files
       o: bind
   db_data:
     driver: local
     driver_opts:
       type: none
-      device: /home/${LOGIN}/data/mariadb
+      device: /home/${LOGIN}/data/mariadb    # bind host path → persistent DB data
       o: bind
 
 secrets:
   db_root_password:
-    file: ../secrets/db_root_password.txt
+    file: ../secrets/db_root_password.txt    # used by MariaDB root
   db_password:
-    file: ../secrets/db_password.txt
+    file: ../secrets/db_password.txt         # used by WP app user
   wp_admin_pass:
-    file: ../secrets/credentials.txt
+    file: ../secrets/credentials.txt         # WP admin password
   wp_second_pass:
-    file: ../secrets/wp_second_pass.txt
+    file: ../secrets/wp_second_pass.txt      # optional second user password
 
 services:
   # ===================== MariaDB =====================
   mariadb:
-    image : mariadb
-    build: ./requirements/mariadb
+    image : mariadb                          # image tag name (ok to keep with build)
+    build: ./requirements/mariadb            # builds your custom DB image
     container_name: mariadb
     restart: unless-stopped
     networks: [appnet]
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_DATABASE: ${MYSQL_DATABASE}                    # e.g., wordpress
+      MYSQL_USER: ${MYSQL_USER}                            # e.g., wpuser
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password        # app user password (secret)
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
     volumes:
-      - db_data:/var/lib/mysql
+      - db_data:/var/lib/mysql              # persist DB files
     secrets:
       - db_root_password
       - db_password
     healthcheck:
+      # Try root with secret; if that fails (first-boot timing), try no password.
       test: ["CMD-SHELL", "mariadb -uroot -p\"$(cat /run/secrets/db_root_password)\" -e 'SELECT 1;' >/dev/null 2>&1 || mariadb -uroot -e 'SELECT 1;' >/dev/null 2>&1"]
       interval: 5s
       timeout: 3s
@@ -60,35 +66,35 @@ services:
 
   # ================= WordPress (php-fpm) ==============
   wordpress:
-    image: wordpress
+    image: wordpress                         # image tag name (ok to keep with build)
     build:
-      context: ./requirements/wordpress
+      context: ./requirements/wordpress      # builds your custom WP+PHP-FPM image
     container_name: wordpress
     restart: unless-stopped
     depends_on:
       mariadb:
-        condition: service_healthy
+        condition: service_healthy           # wait for DB healthcheck to pass
     networks: [appnet]
     environment:
-      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_HOST: mariadb:3306        # service:port inside appnet
       WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
       WORDPRESS_DB_USER: ${MYSQL_USER}
       WORDPRESS_DB_PASSWORD_FILE: /run/secrets/db_password
-      WP_ADMIN_USER: ${WP_ADMIN_USER}
+      WP_ADMIN_USER: ${WP_ADMIN_USER}        # admin login name
       WP_ADMIN_EMAIL: ${WP_ADMIN_EMAIL}
-      WP_AUTO_INSTALL: ${WP_AUTO_INSTALL:-1}
-      DOMAIN_NAME: ${DOMAIN_NAME}
+      WP_AUTO_INSTALL: ${WP_AUTO_INSTALL:-1} # 1 = auto-install via wp-cli, 0 = skip
+      DOMAIN_NAME: ${DOMAIN_NAME}            # used to build SITE_URL
       WP_SECOND_USER: ${WP_SECOND_USER:-writer42}
       WP_SECOND_EMAIL: ${WP_SECOND_EMAIL:-writer42@example.com}
       WP_SECOND_PASSWORD_FILE: /run/secrets/wp_second_pass
     volumes:
-      - wp_data:/var/www/wordpress
+      - wp_data:/var/www/wordpress           # share code/uploads with NGINX
     secrets:
       - db_password
       - wp_admin_pass
       - wp_second_pass
     healthcheck:
-      # healthy only when FPM cfg parses AND index.php exists (prevents nginx 403)
+      # Healthy when FPM parses config AND index.php exists (prevents NGINX 403)
       test: ["CMD-SHELL", "php-fpm82 -t >/dev/null 2>&1 || exit 1; [ -f /var/www/wordpress/index.php ]"]
       interval: 5s
       timeout: 3s
@@ -97,21 +103,20 @@ services:
 
   # ====================== NGINX =======================
   nginx:
-    image: nginx
+    image: nginx                             # image tag name (ok to keep with build)
     build:
       context: ./requirements/nginx
       args:
-        DOMAIN_NAME: ${DOMAIN_NAME}
+        DOMAIN_NAME: ${DOMAIN_NAME}          # used by gen-cert.sh at build-time
     container_name: nginx
     restart: unless-stopped
     depends_on:
       wordpress:
-        condition: service_healthy
+        condition: service_healthy           # wait for WordPress to be ready
     networks: [appnet]
     ports:
-      - "443:443"
+      - "443:443"                            # expose HTTPS to host
     environment:
-      DOMAIN_NAME: ${DOMAIN_NAME}
+      DOMAIN_NAME: ${DOMAIN_NAME}            # available for logs/templates if needed
     volumes:
-      - wp_data:/var/www/wordpress:ro
-
+      - wp_data:/var/www/wordpress:ro        # serve same docroot (read-only in NGINX)
